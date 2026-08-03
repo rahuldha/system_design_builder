@@ -1,0 +1,539 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Wispr Flow — System Design Notes</title>
+<meta name="description" content="Interview-ready system design breakdown of Wispr Flow: architecture, capacity math, LLM post-processing pipeline, and privacy model." />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cline x1='8' y1='24' x2='24' y2='24' stroke='%23b85c1e' stroke-width='2.5'/%3E%3Cline x1='8' y1='24' x2='16' y2='9' stroke='%23b85c1e' stroke-width='2.5'/%3E%3Cline x1='24' y1='24' x2='16' y2='9' stroke='%23b85c1e' stroke-width='2.5'/%3E%3Ccircle cx='8' cy='24' r='3.5' fill='%23b85c1e'/%3E%3Ccircle cx='24' cy='24' r='3.5' fill='%23b85c1e'/%3E%3Ccircle cx='16' cy='9' r='3.5' fill='%23b85c1e'/%3E%3C/svg%3E" />
+<link rel="stylesheet" href="assets/style.css" />
+</head>
+<body>
+
+<header class="site-header">
+  <a class="site-brand" href="index.html">
+    <svg class="mark" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <line x1="8" y1="24" x2="24" y2="24" stroke="currentColor" stroke-width="2.5"/>
+      <line x1="8" y1="24" x2="16" y2="9" stroke="currentColor" stroke-width="2.5"/>
+      <line x1="24" y1="24" x2="16" y2="9" stroke="currentColor" stroke-width="2.5"/>
+      <circle cx="8" cy="24" r="3.2" fill="currentColor"/>
+      <circle cx="24" cy="24" r="3.2" fill="currentColor"/>
+      <circle cx="16" cy="9" r="3.2" fill="currentColor"/>
+    </svg>
+    System Design Notes <small>/ system_design_builder</small>
+  </a>
+  <nav>
+    <a href="granola.html">Granola</a>
+    <a href="https://github.com/rahuldha/system_design_builder/blob/main/system-designs/wispr-flow.md">Source .md ↗</a>
+  </nav>
+</header>
+
+<div class="page">
+  <aside class="sidebar">
+    <a class="back-link" href="index.html">← All docs</a>
+    <div>
+      <p class="sidebar-title">On this page</p>
+      <ul class="toc">
+        <li><a href="#requirements">01 · Requirements &amp; Scope</a></li>
+        <li><a href="#capacity">02 · Capacity Estimation</a></li>
+        <li><a href="#architecture">03 · High-Level Architecture</a></li>
+        <li><a href="#apis">04 · APIs &amp; Contracts</a></li>
+        <li><a href="#data-model">05 · Data Model &amp; Storage</a></li>
+        <li><a href="#audio-capture">06 · Audio Capture &amp; OS Integration</a></li>
+        <li><a href="#llm-pipeline">07 · LLM Post-Processing Pipeline</a></li>
+        <li><a href="#context-formatting">08 · Context-Aware Formatting</a></li>
+        <li><a href="#model-serving">09 · Model Serving on Baseten/AWS</a></li>
+        <li><a href="#privacy">10 · Privacy &amp; Zero Data Retention</a></li>
+        <li><a href="#cross-platform">11 · Cross-Platform Divergence</a></li>
+        <li><a href="#scaling">Scaling &amp; Caching</a></li>
+        <li><a href="#failures">Failures &amp; Reliability</a></li>
+        <li><a href="#recap">Recap &amp; Cheat Sheet</a></li>
+      </ul>
+    </div>
+  </aside>
+
+  <main class="doc">
+    <div class="doc-header">
+      <p class="eyebrow">Real company · voice dictation · generated 2026-08-02</p>
+      <h1>Wispr Flow</h1>
+      <p class="tagline">An LLM-native, OS-layer voice dictation tool that turns speech into properly formatted text in any application — not just a faster microphone button.</p>
+      <div class="stat-strip tabular">
+        <span>~$10M ARR (2025)</span><span class="sep">·</span>
+        <span>$700M valuation (Nov 2025), reportedly in talks near $2B (2026)</span><span class="sep">·</span>
+        <span>2.5M+ downloads</span><span class="sep">·</span>
+        <span>270 Fortune 500 customers</span><span class="sep">·</span>
+        <span>70% 12-month retention</span><span class="sep">·</span>
+        <span>&lt;700ms p99 end-to-end latency</span>
+      </div>
+      <div class="topics">
+        <span class="tag">Requirements &amp; Scope</span><span class="tag">Capacity Estimation</span><span class="tag">High-Level Architecture</span><span class="tag">APIs &amp; Contracts</span><span class="tag">Data Model &amp; Storage</span><span class="tag">Audio Capture &amp; OS Integration</span><span class="tag">LLM Post-Processing Pipeline</span><span class="tag">Context-Aware Formatting</span><span class="tag">Model Serving on Baseten/AWS</span><span class="tag">Privacy Modes &amp; ZDR</span><span class="tag">Cross-Platform Divergence</span><span class="tag">Scaling &amp; Caching</span><span class="tag">Failures &amp; Reliability</span><span class="tag">Recap &amp; Cheat Sheet</span>
+      </div>
+    </div>
+
+    <section class="doc-section" id="requirements">
+      <h2><span class="section-num">01</span> Requirements &amp; Scope</h2>
+
+      <h3 class="subhead">Core features</h3>
+      <ul class="checklist">
+        <li class="yes"><span class="glyph">✓</span> Real-time voice dictation, system-wide (not confined to one app)</li>
+        <li class="yes"><span class="glyph">✓</span> LLM-based cleanup: grammar correction, tone matching, personal phrasing adaptation</li>
+        <li class="yes"><span class="glyph">✓</span> Context-aware output formatting (an email reads like an email, a code comment reads like a code comment)</li>
+        <li class="yes"><span class="glyph">✓</span> Cross-platform: macOS, Windows, iOS, Android</li>
+        <li class="yes"><span class="glyph">✓</span> Privacy controls: Privacy Mode (zero data retention) and optional Private Cloud Sync</li>
+      </ul>
+
+      <h3 class="subhead">Functional requirements</h3>
+      <ul>
+        <li>Capture audio from the OS microphone layer regardless of which foreground app has focus, and inject formatted text back into that app's input field.</li>
+        <li>Detect the active application and relevant visible context so formatting adapts to destination (Slack vs. email vs. IDE).</li>
+        <li>Process speech through an LLM-based correction/formatting pass rather than emitting a raw ASR transcript.</li>
+        <li>Support enterprise trust requirements (SOC 2 Type II, HIPAA controls) for regulated customers <span class="flag sourced">(sourced: Baseten case study, Wispr Flow security FAQ)</span>.</li>
+      </ul>
+
+      <h3 class="subhead">Non-functional requirements</h3>
+      <ul>
+        <li>Low perceived latency: end-to-end pipeline p99 &lt; 700ms is the company's own stated target, prioritized over median latency <span class="flag sourced">(sourced: Baseten case study — "we're optimizing the p99 experience for the p99 user")</span>.</li>
+        <li>High transcription accuracy across accents, microphones, and background noise (independently reported ~92–97% depending on mic/environment).</li>
+        <li>Strong data-handling guarantees given audio/screen-context is sent to third-party cloud infra.</li>
+      </ul>
+
+      <h3 class="subhead">Out of scope</h3>
+      <ul class="checklist">
+        <li class="no"><span class="glyph">✕</span> Fully offline/on-device transcription — Flow is cloud-only by design (the opposite tradeoff from on-device competitors like Superwhisper).</li>
+        <li class="no"><span class="glyph">✕</span> Meeting/multi-speaker transcription (Otter's category, not Flow's) — Flow is single-speaker, real-time dictation.</li>
+        <li class="no"><span class="glyph">✕</span> A public developer API for third-party integration <span class="flag inferred">(inferred — not publicly confirmed)</span>.</li>
+      </ul>
+
+      <div class="callout tip">
+        <span class="callout-label">💡 Interview Tip</span>
+        <p>The single most interesting design decision here is architectural, not ML: Flow deliberately does <strong>not</strong> stream a live ASR transcript. It buffers, lets the LLM "understand what you meant," and only then renders text — trading a few hundred ms of perceived latency for dramatically fewer correction/backspace cycles. Framing your whole answer around that one tradeoff is a strong way to structure a live interview response.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="capacity">
+      <h2><span class="section-num">02</span> Capacity Estimation</h2>
+
+      <h3 class="subhead">Assumptions</h3>
+      <p class="muted" style="font-size:0.88rem">Daily-active-user figure is estimated from public download/retention data, not officially disclosed — flagged below.</p>
+      <ul>
+        <li>~2.5M cumulative downloads, 70% 12-month retention → assume ~400K–600K monthly active users <span class="flag inferred">(inferred)</span></li>
+        <li>Assume ~15% of MAU are daily dictation users → ~60K–90K DAU <span class="flag inferred">(inferred)</span></li>
+        <li>Assume average 25 dictation sessions/user/day, ~15 seconds of audio per session (typical for short dictation bursts)</li>
+        <li>Audio encoded compactly for upload (~16kbps compressed speech-optimized codec assumed)</li>
+      </ul>
+
+      <h3 class="subhead">Throughput / bandwidth</h3>
+      <pre class="calc">75,000 DAU × 25 sessions/day × 15s audio × 16 kbps
+= 75,000 × 25 × 15 × 16,000 bits ÷ 8 bits/byte
+= 75,000 × 25 × 30,000 bytes
+≈ 56.25 GB of audio uploaded per day</pre>
+      <p class="takeaway"><strong>Takeaway:</strong> Per-session payloads are tiny (~30KB), so the system is optimized for request volume and tail latency, not raw bandwidth — this is a high-QPS, low-payload workload, closer to a chat API than a media-streaming service.</p>
+
+      <h3 class="subhead">Daily data volume</h3>
+      <pre class="calc">56.25 GB audio (transient, discarded unless Cloud Sync is on)
++ formatted-text transcripts (~1KB/session avg)
+  75,000 × 25 × 1KB ≈ 1.9 GB/day of durable transcript text (only for users with Private Cloud Sync on)</pre>
+      <p class="takeaway"><strong>Takeaway:</strong> Because Privacy Mode/no-retention is a first-class option, durable storage volume is a small fraction of total traffic — most audio is processed and discarded, not archived <span class="flag sourced">(architecture confirmed by Wispr's own data controls page and privacy policy)</span>.</p>
+
+      <h3 class="subhead">Storage sizing</h3>
+      <pre class="calc">Assume 30% of MAU opt into Private Cloud Sync, 90-day rolling retention
+500,000 MAU × 30% × 1.9GB/75,000 users/day × 90 days
+≈ 150,000 users × ~25KB/day × 90 days
+≈ 340 GB of retained transcript+metadata storage</pre>
+      <p class="takeaway"><strong>Takeaway:</strong> This is a modest storage footprint even at scale — text is cheap; the hard engineering problem here is latency and correctness, not data volume.</p>
+
+      <h3 class="subhead">Read/write QPS</h3>
+      <pre class="calc">75,000 DAU × 25 sessions/day ÷ 86,400s/day ≈ 22 dictation-completion writes/sec average
+Assume 8x peak-to-average ratio (dictation clusters around work hours across timezones)
+≈ 175 peak writes/sec for the inference pipeline</pre>
+      <p class="takeaway"><strong>Takeaway:</strong> Peak QPS is well within range of a single well-provisioned autoscaled GPU serving fleet — this maps directly to why Baseten's autoscaling (rather than fixed GPU reservation) was the stated infra choice <span class="flag sourced">(sourced: Baseten case study)</span>.</p>
+    </section>
+
+    <section class="doc-section" id="architecture">
+      <h2><span class="section-num">03</span> High-Level Architecture</h2>
+
+      <div class="diagram">
+        <div class="flow-row">
+          <div class="flow-box">Client OS Overlay</div>
+          <div class="flow-arrow"></div>
+          <div class="flow-box">Local Capture &amp; VAD Preprocess</div>
+          <div class="flow-arrow"></div>
+          <div class="flow-box accent">Cloud Inference Pipeline<small>Baseten</small></div>
+          <div class="flow-arrow"></div>
+          <div class="flow-box">Text Injection<small>back into app</small></div>
+        </div>
+        <div class="flow-stack">
+          <div class="flow-connector"><div class="stem"></div><div class="arrowhead"></div></div>
+          <div class="flow-box">Fine-tuned Llama models<small>TensorRT-LLM, Chains — autoscaled GPU on AWS</small></div>
+          <div class="flow-connector"><div class="stem"></div><div class="arrowhead"></div></div>
+          <div class="flow-box muted">Optional: encrypted transcript store<small>Private Cloud Sync</small></div>
+        </div>
+      </div>
+
+      <div class="callout why">
+        <span class="callout-label">Why this shape?</span>
+        <ul>
+          <li>Client stays thin (capture + VAD + injection only) so the same core cloud pipeline serves four very different OS surfaces (Mac, Windows, iOS, Android) without duplicating the AI stack per platform.</li>
+          <li>Cloud-only inference is a deliberate tradeoff (not a limitation) — it's what makes context-aware LLM formatting possible at all, since on-device models couldn't match the fine-tuned Llama quality bar <span class="flag sourced">(sourced: Wispr's own product blog)</span>.</li>
+          <li>Storage is opt-in and decoupled from the hot path — the default path (no Cloud Sync) never touches durable storage at all, keeping the common case both fast and low-liability.</li>
+        </ul>
+      </div>
+
+      <h3 class="subhead">Request flow</h3>
+      <ol class="step-list">
+        <li>User speaks; OS-level overlay captures audio locally and runs basic voice-activity detection.</li>
+        <li>On pause/completion, the buffered audio (plus lightweight active-app/context signal) is sent to the cloud pipeline.</li>
+        <li>Baseten-hosted, fine-tuned Llama models (served via TensorRT-LLM engines, orchestrated through Baseten's Chains framework for the multi-step pipeline) transcribe and reformat the speech in one pass — not a live streaming transcript.</li>
+        <li>The formatted text token stream returns to the client (Wispr reports 100+ tokens generated in &lt;250ms).</li>
+        <li>The client injects the finished text directly into the focused application's input field.</li>
+        <li>If Private Cloud Sync is enabled, the transcript is written to encrypted storage; otherwise it's discarded immediately after the response is delivered.</li>
+      </ol>
+    </section>
+
+    <section class="doc-section" id="apis">
+      <h2><span class="section-num">04</span> APIs &amp; Contracts</h2>
+
+      <p>Wispr Flow is a consumer/enterprise product, not a published developer platform — no public API was found in research, so this section models the <strong>internal</strong> client↔cloud contract rather than a third-party-facing API surface <span class="flag inferred">(inferred — not publicly confirmed; no public API docs exist)</span>.</p>
+
+      <h3 class="subhead">Dictation endpoints (inferred internal contract)</h3>
+      <ul>
+        <li><code>POST /v1/dictation/sessions</code> — open a dictation session, register active-app context</li>
+        <li><code>POST /v1/dictation/sessions/{id}/audio</code> — stream/submit captured audio chunk(s)</li>
+        <li><code>GET /v1/dictation/sessions/{id}/result</code> — poll or receive pushed formatted-text result</li>
+        <li><code>POST /v1/dictation/sessions/{id}/close</code> — finalize session, trigger optional Cloud Sync write</li>
+      </ul>
+
+      <h3 class="subhead">Example: submit-and-receive dictation result <span class="flag inferred">(illustrative — not a confirmed public schema)</span></h3>
+      <pre class="calc">{
+  "request": {
+    "session_id": "sess_8f2a1c",
+    "audio": "&lt;base64 or streamed binary, ~30KB&gt;",
+    "context": {
+      "active_app": "slack",
+      "visible_text_snippet": "…redacted…",
+      "privacy_mode": true
+    }
+  },
+  "response": {
+    "session_id": "sess_8f2a1c",
+    "formatted_text": "Hey team — pushing the fix now, should be live in ~10 min.",
+    "latency_ms": 612,
+    "stored": false
+  }
+}</pre>
+
+      <h3 class="subhead">Protocol notes</h3>
+      <ul>
+        <li>Idempotency matters here mainly for the audio-submit step (client retries on flaky mobile networks shouldn't double-transcribe) <span class="flag inferred">(inferred)</span>.</li>
+        <li><code>privacy_mode</code> / Zero Data Retention is a first-class request-level flag per Wispr's documented data controls, not an account-wide setting only — Privacy Mode is off by default for non-HIPAA users and must be explicitly enabled <span class="flag sourced">(sourced: Wispr Flow data controls / security FAQ)</span>.</li>
+      </ul>
+    </section>
+
+    <section class="doc-section" id="data-model">
+      <h2><span class="section-num">05</span> Data Model &amp; Storage</h2>
+
+      <div class="entity-grid">
+        <div class="entity-card">
+          <h4>Session</h4>
+          <ul class="entity-fields">
+            <li class="pk"><span class="field-badge">PK</span> <code>session_id</code> <span class="muted">(UUID)</span></li>
+            <li class="ck"><span class="field-badge">CK</span> <code>user_id</code></li>
+            <li><code>started_at</code>, <code>ended_at</code></li>
+            <li><code>active_app</code> <span class="muted">(string)</span></li>
+            <li><code>privacy_mode</code> <span class="muted">(bool)</span></li>
+          </ul>
+        </div>
+        <div class="entity-card">
+          <h4>Transcript</h4>
+          <p class="entity-note">Only persisted when Private Cloud Sync is enabled</p>
+          <ul class="entity-fields">
+            <li class="pk"><span class="field-badge">PK</span> <code>transcript_id</code> <span class="muted">(UUID)</span></li>
+            <li class="ck"><span class="field-badge">CK</span> <code>session_id</code></li>
+            <li><code>formatted_text</code> <span class="muted">(encrypted at rest)</span></li>
+            <li><code>created_at</code>, <code>retention_expires_at</code></li>
+          </ul>
+        </div>
+        <div class="entity-card">
+          <h4>User</h4>
+          <ul class="entity-fields">
+            <li class="pk"><span class="field-badge">PK</span> <code>user_id</code> <span class="muted">(UUID)</span></li>
+            <li><code>plan_tier</code> <span class="muted">(free / pro / enterprise)</span></li>
+            <li><code>privacy_mode_default</code> <span class="muted">(bool)</span></li>
+            <li><code>org_id</code> <span class="muted">(nullable, for Fortune 500/enterprise seats)</span></li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="callout critical">
+        <span class="callout-label">🔑 Critical Design Detail</span>
+        <p>The retention model is the actual product differentiator here, not the schema shape. Wispr explicitly separates "Privacy Mode" (are we allowed to train on/store this at all) from "Cloud Sync" (do we persist transcripts for the user's own history) — Zero Data Retention is defined specifically as <em>both</em> being off simultaneously <span class="flag sourced">(sourced: Wispr Flow data controls page)</span>. Any credible data model for this product has to represent that as two independent flags, not one binary "save or don't."</p>
+      </div>
+
+      <h3 class="subhead">Storage choices</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Data type</th><th>Store</th><th>Why</th></tr></thead>
+          <tbody>
+            <tr><td>In-flight audio</td><td>Ephemeral, in-memory/streaming buffer near the inference layer</td><td>Never durably stored by default; discarded post-request <span class="flag inferred">(inferred implementation, confirmed behavior)</span></td></tr>
+            <tr><td>Persisted transcripts (Cloud Sync users)</td><td>Encrypted-at-rest document/KV store</td><td>Small records, high read-by-user-id access pattern, encryption is a stated requirement, not the specific store <span class="flag inferred">(inferred — specific database technology not publicly confirmed)</span></td></tr>
+            <tr><td>User/account/org metadata</td><td>Relational store (assumed Postgres-class)</td><td>Standard for account/billing/org-hierarchy data at this scale <span class="flag inferred">(inferred)</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 class="subhead">Partitioning &amp; access patterns</h3>
+      <ul>
+        <li>Partition key: <code>user_id</code> (or <code>org_id</code> for enterprise multi-seat accounts) — nearly all reads/writes are scoped to "this user's own history."</li>
+        <li>Dominant access patterns:
+          <ul>
+            <li>Write-once-per-session transcript insert (Cloud Sync path only)</li>
+            <li>Read-by-user-id for in-app dictation history</li>
+            <li>Bulk delete-by-retention-expiry (background job enforcing the configured retention window)</li>
+          </ul>
+        </li>
+      </ul>
+    </section>
+
+    <section class="doc-section" id="audio-capture">
+      <h2><span class="section-num">06</span> Audio Capture &amp; OS Integration</h2>
+
+      <p>Flow runs as an OS-layer overlay rather than embedding inside individual apps — described in its own product writing as "a layer that runs across them all: email, Slack, Notion, iMessage, ChatGPT, etc." <span class="flag sourced">(sourced: Wispr Flow blog, "Designing a natural and useful voice interface")</span>.</p>
+
+      <div class="diagram">
+        <div class="flow-row" style="justify-content:center">
+          <div class="flow-box">OS Accessibility / Input Layer</div>
+          <div class="flow-arrow"></div>
+          <div class="flow-box accent">Wispr Overlay Process</div>
+          <div class="flow-arrow"></div>
+          <div class="flow-box">Focused App's Text Field</div>
+        </div>
+      </div>
+
+      <ul>
+        <li>Local voice-activity detection (VAD) determines start/stop of a dictation turn before anything is sent to the cloud.</li>
+        <li>A persistent, low-attention UI element ("a small, persistent bar on the dock") signals recording state without being visually intrusive.</li>
+        <li>The overlay must integrate with OS-level accessibility/input APIs to inject text into an arbitrary focused field — this is the hardest cross-platform engineering problem in the whole system, not the ML.</li>
+      </ul>
+
+      <div class="callout tradeoff">
+        <span class="callout-label">Tradeoff</span>
+        <p>Building a true OS-level overlay (vs. a per-app plugin/extension model) means far more platform-specific engineering work, but it's what lets Flow work identically inside Slack, an IDE, or a native mobile app — a plugin-per-app model would never reach that breadth.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="llm-pipeline">
+      <h2><span class="section-num">07</span> LLM Post-Processing Pipeline <span class="muted" style="font-weight:400;font-size:0.7em">(Not Streaming ASR)</span></h2>
+
+      <p>This is the architectural decision most worth interview time.</p>
+
+      <div class="diagram">
+        <div class="flow-row" style="justify-content:center">
+          <div class="flow-box muted">Audio</div>
+          <div class="flow-arrow"></div>
+          <div class="flow-box">Speech Encoder</div>
+          <div class="flow-arrow"></div>
+          <div class="flow-box accent">Fine-tuned Llama<small>transcribe + clean + format</small></div>
+          <div class="flow-arrow"></div>
+          <div class="flow-box muted">Final Text</div>
+        </div>
+        <p class="diagram-caption">(no intermediate raw-transcript UI shown to user)</p>
+      </div>
+
+      <ul>
+        <li>Traditional dictation tools stream a raw ASR transcript token-by-token, visibly correcting itself as you speak. Flow deliberately withholds output until the LLM pass completes, explicitly described as choosing to "wait, understand, and then write what you <em>meant</em>" rather than what was literally said <span class="flag sourced">(sourced: Wispr Flow blog)</span>.</li>
+        <li>This single pass handles transcription, grammar correction, tone-matching, and (over time) adaptation to a user's personal phrasing style together, rather than as separate pipeline stages <span class="flag sourced">(sourced: Wispr Flow blog)</span>.</li>
+      </ul>
+
+      <div class="callout tradeoff">
+        <span class="callout-label">Tradeoff</span>
+        <p>Buffer-then-format vs. stream-then-correct. Streaming feels more "live" but produces visibly messy intermediate text and more user-side correction. Flow's buffered approach adds a few hundred ms of perceived latency (justifying the aggressive p99 &lt; 700ms target) in exchange for output that's usually correct on the first render.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="context-formatting">
+      <h2><span class="section-num">08</span> Context-Aware Formatting</h2>
+
+      <ul>
+        <li>The client detects the active application and relevant visible content and passes that as context alongside the audio <span class="flag sourced">(sourced: research summary of Wispr's architecture)</span>.</li>
+        <li>The same underlying LLM pass uses that context to decide output shape: an email destination produces email-formatted prose, a code-editor destination produces a properly structured code comment.</li>
+      </ul>
+
+      <div class="callout tradeoff">
+        <span class="callout-label">Tradeoff</span>
+        <p>Sending screen/app-context metadata to the cloud (not just raw audio) increases what's "personal/sensitive" about each request — which is precisely why Privacy Mode / Zero Data Retention exists as a first-class, easily-toggled control rather than an afterthought.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="model-serving">
+      <h2><span class="section-num">09</span> Model Serving on Baseten/AWS <span class="key-page-flag">★ Key Page</span></h2>
+
+      <div class="diagram">
+        <div class="flow-row">
+          <div class="flow-box">Client Request</div>
+          <div class="flow-arrow"></div>
+          <div class="flow-box accent">Baseten Model Endpoint<small>AWS us-east-1</small></div>
+          <div class="flow-arrow"></div>
+          <div class="flow-box">TensorRT-LLM engine</div>
+        </div>
+        <div class="flow-stack">
+          <div class="flow-connector"><div class="stem"></div><div class="arrowhead"></div></div>
+          <div class="flow-box muted">Baseten "Chains" framework<small>orchestrates multi-step inference: transcribe → format</small></div>
+        </div>
+      </div>
+
+      <ul>
+        <li>Fine-tuned Meta Llama models, chosen specifically for "complete ownership over their AI systems" rather than depending purely on a third-party foundation-model API <span class="flag sourced">(sourced: Baseten case study)</span>.</li>
+        <li>TensorRT-LLM used as the inference engine builder for the fine-tuned models; Baseten's Chains framework orchestrates the multi-step pipeline (transcribe → clean → format) as a single served unit rather than several hand-wired services.</li>
+        <li>GPU capacity autoscales for traffic spikes rather than holding permanent reservations — directly addresses the ~175 peak-QPS estimate from Section 02 without idle GPU cost during off-peak hours.</li>
+        <li>The company explicitly optimizes for p99, not median latency ("we're optimizing the p99 experience for the p99 user") — a notable departure from the median-latency-first framing common in most system-design answers.</li>
+      </ul>
+
+      <div class="callout tradeoff">
+        <span class="callout-label">Tradeoff</span>
+        <p>Fine-tuning and self-hosting (via Baseten) vs. calling a foundation-model API directly. Self-hosting costs more engineering effort but buys latency control (100+ tokens in &lt;250ms), customization depth, and avoids being fully dependent on a third party for the core product experience — though research also surfaced that OpenAI and Meta models have been used as infrastructure partners at various points, suggesting a hybrid/multi-provider strategy rather than single-vendor lock-in <span class="flag inferred">(inferred — exact current model-provider mix not fully confirmed)</span>.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="privacy">
+      <h2><span class="section-num">10</span> Privacy Modes &amp; Zero Data Retention</h2>
+
+      <ul>
+        <li><strong>Privacy Mode:</strong> controls whether dictation data can be used to evaluate/train/improve AI models (by Wispr or any third party). Off by default for non-HIPAA users <span class="flag sourced">(sourced: Wispr Flow security/compliance FAQ)</span>.</li>
+        <li><strong>Private Cloud Sync:</strong> controls whether transcripts are durably stored (encrypted at rest/in transit) vs. processed in real time and discarded after the request completes.</li>
+        <li><strong>Zero Data Retention (ZDR)</strong> = Privacy Mode on <strong>and</strong> Cloud Sync off, simultaneously — no training use, no server-side storage at all.</li>
+        <li>Compliance posture: SOC 2 Type II certified, HIPAA controls available on all plans <span class="flag sourced">(sourced: Baseten case study, Wispr security FAQ)</span>.</li>
+      </ul>
+
+      <div class="callout tip">
+        <span class="callout-label">💡 Interview Tip</span>
+        <p>This is a good place to demonstrate PM-level thinking, not just engineering: the retention model isn't just a technical toggle, it's a segmentation strategy — HIPAA/enterprise customers get privacy-by-default, prosumer users get convenience-by-default (searchable dictation history), and the same underlying architecture serves both without a separate deployment.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="cross-platform">
+      <h2><span class="section-num">11</span> Cross-Platform Divergence <span class="muted" style="font-weight:400;font-size:0.7em">(Android vs. iOS vs. Desktop)</span></h2>
+
+      <ul>
+        <li><strong>Android:</strong> floating overlay/bubble sits above every app — a deliberate choice to avoid Android's fragmented keyboard-replacement ecosystem <span class="flag sourced">(sourced: Wispr Flow blog / research summary)</span>.</li>
+        <li><strong>iOS:</strong> implemented closer to a keyboard-extension pattern, aligning with Apple's stricter platform conventions for system-wide input <span class="flag sourced">(sourced: research summary)</span>.</li>
+        <li><strong>Desktop (Mac/Windows):</strong> full OS-level accessibility-layer integration, injecting text into essentially any focused field.</li>
+      </ul>
+
+      <div class="callout tradeoff">
+        <span class="callout-label">Tradeoff</span>
+        <p>A single "floating bubble" UI everywhere would be simplest to build, but iOS platform constraints make that pattern awkward there — so Flow accepts extra platform-specific engineering to respect each OS's conventions rather than forcing one UI paradigm across all four platforms.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="scaling">
+      <h2>Scaling &amp; Caching</h2>
+
+      <p><strong>Cache hierarchy:</strong> Given the workload is short, unique, per-user audio, there's little to cache on the inference path itself (each request is novel speech) — the more relevant caching is at the model-serving layer: warm GPU model replicas kept ready via Baseten's autoscaling rather than cold-starting per request <span class="flag inferred">(inferred implementation detail; autoscaling behavior itself is sourced from the Baseten case study)</span>.</p>
+
+      <p><strong>Hot-key mitigation:</strong> Not a classic hot-partition problem — traffic is naturally spread across millions of independent users/sessions rather than concentrated on a few keys. The closer analog is <em>regional</em> load concentration during business hours across timezones, addressed by autoscaling GPU capacity rather than data-layer sharding.</p>
+
+      <p><strong>Sharding:</strong> Persisted transcript/account data would naturally shard by <code>user_id</code>/<code>org_id</code> given the access pattern established in Section 05 <span class="flag inferred">(inferred)</span>.</p>
+
+      <p><strong>Multi-region:</strong> Wispr's infrastructure is described as supporting multi-region deployments for compliance and latency reasons <span class="flag sourced">(sourced: Baseten case study)</span>; primary inference is documented as running in AWS us-east-1, with other regions likely used for latency-sensitive or data-residency-constrained customers <span class="flag inferred">(inferred beyond the confirmed us-east-1 detail)</span>.</p>
+    </section>
+
+    <section class="doc-section" id="failures">
+      <h2>Failures &amp; Reliability</h2>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Failure Mode</th><th>Mitigation</th></tr></thead>
+          <tbody>
+            <tr><td>Cloud inference endpoint unavailable/slow</td><td>Client should degrade to a clear "unavailable" state rather than silently failing — cloud-only architecture means there's no local fallback transcription <span class="flag inferred">(inferred)</span></td></tr>
+            <tr><td>GPU capacity spike beyond autoscaling headroom</td><td>Baseten's autoscaling is the documented mitigation; presumably backed by request queuing/backpressure at the edge <span class="flag inferred">(partially inferred)</span></td></tr>
+            <tr><td>Text injected into wrong/unintended field (focus changed mid-dictation)</td><td>OS-level focus-tracking must re-validate target field before injection — a documented UX/engineering challenge given the cross-app injection model</td></tr>
+            <tr><td>Sensitive context leaked via screen-context capture</td><td>Privacy Mode / ZDR exists specifically to bound this risk; enterprise HIPAA customers get privacy-by-default posture</td></tr>
+            <tr><td>Third-party model-provider outage/degradation (if using OpenAI/Meta-hosted infra alongside self-hosted Baseten models)</td><td>Multi-provider strategy (self-hosted fine-tuned Llama + third-party partners) plausibly provides some redundancy, though this is not confirmed as an explicit failover design <span class="flag inferred">(inferred)</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p><strong>Degradation ladder:</strong> Full LLM formatting → (if degraded) fall back toward faster/cheaper model tier → (if fully unavailable) clear "dictation unavailable" state, since there's no offline path by design <span class="flag inferred">(inferred)</span>.</p>
+
+      <p><strong>Client resilience:</strong> Local VAD/buffering should tolerate brief network blips without dropping in-progress audio; retries on the audio-submit step should be idempotent per session (see Section 04 API notes) <span class="flag inferred">(inferred)</span>.</p>
+
+      <p><strong>What to monitor:</strong> p99 end-to-end latency (the company's own headline metric), GPU utilization/autoscaling lag, transcription accuracy drift by device/mic type, injection-failure rate (text landing in the wrong field).</p>
+    </section>
+
+    <section class="doc-section" id="recap">
+      <h2>Recap &amp; Interview Cheat Sheet</h2>
+
+      <p class="one-liner"><strong>The whole system in one line:</strong> A thin, OS-level capture client feeds short audio bursts to a fine-tuned-Llama inference pipeline (self-hosted on Baseten/AWS for latency and model control) that transcribes <em>and</em> formats in one LLM pass, with storage being opt-in rather than default.</p>
+
+      <div class="diagram">
+        <div class="flow-row">
+          <div class="flow-box">Client Overlay</div>
+          <div class="flow-arrow"></div>
+          <div class="flow-box accent">Cloud LLM Pipeline<small>Baseten/AWS, autoscaled</small></div>
+          <div class="flow-arrow"></div>
+          <div class="flow-box">Formatted Text</div>
+          <div class="flow-arrow"></div>
+          <div class="flow-box muted">Injected back</div>
+        </div>
+        <div class="flow-stack">
+          <div class="flow-connector"><div class="stem"></div><div class="arrowhead"></div></div>
+          <div class="flow-box muted">Optional encrypted transcript store<small>Cloud Sync only</small></div>
+        </div>
+      </div>
+
+      <h3 class="subhead">Top talking points</h3>
+      <ul class="talking-points">
+        <li>Buffer-then-format beats stream-then-correct for this product's UX goals — explicitly a latency-for-correctness tradeoff.</li>
+        <li>p99, not median, is the latency metric the company optimizes for.</li>
+        <li>Self-hosted fine-tuned models (via Baseten) trade engineering effort for latency control and independence from a single foundation-model vendor.</li>
+        <li>Privacy Mode and Cloud Sync are two independent flags, not one — this is the real product/data-model insight, not the entity schema.</li>
+        <li>The hardest engineering problem is OS-level, cross-app text injection — not the ML.</li>
+        <li>Storage is opt-in and small relative to total traffic, because most audio is processed and discarded.</li>
+      </ul>
+
+      <h3 class="subhead">Quick Q&amp;A</h3>
+      <div class="qa-list">
+        <div class="qa-item"><p class="q">Why not stream ASR results like most dictation tools?</p><p class="a">Streaming ASR shows visibly-wrong intermediate text; buffering lets the LLM correct for <em>meaning</em> before anything renders.</p></div>
+        <div class="qa-item"><p class="q">How do they hit sub-second latency with an LLM in the loop?</p><p class="a">Self-hosted fine-tuned models on dedicated, autoscaled GPU infra (TensorRT-LLM via Baseten) instead of a general-purpose hosted API.</p></div>
+        <div class="qa-item"><p class="q">What happens to my audio?</p><p class="a">Discarded after processing by default; only persisted (encrypted) if the user explicitly enables Private Cloud Sync.</p></div>
+        <div class="qa-item"><p class="q">Why is this cloud-only instead of on-device like some competitors?</p><p class="a">The LLM-based formatting quality bar isn't achievable on-device today; cloud-only is a deliberate quality tradeoff, not an oversight.</p></div>
+      </div>
+
+      <h3 class="subhead">Numbers to remember</h3>
+      <div class="numbers-grid tabular">
+        <div class="num-item">p99 end-to-end latency: &lt;700ms; 100+ tokens generated in &lt;250ms</div>
+        <div class="num-item">~2.5M downloads, 270 Fortune 500 customers, 70% 12-month retention</div>
+        <div class="num-item">$10M ARR (2025); valuation moved from ~$700M (Nov 2025) toward reported $2B talks (2026)</div>
+      </div>
+
+      <h3 class="subhead">Mistakes to avoid</h3>
+      <ul class="mistakes">
+        <li>Don't default to describing this as "just a Whisper API wrapper" — the differentiated architecture is the buffered LLM-formatting pass and the self-hosted serving stack, not the ASR step alone.</li>
+        <li>Don't skip the privacy/retention model — it's a first-class architectural component here, not a bolt-on compliance checkbox.</li>
+        <li>Don't assume streaming transcription is strictly better — this product's core bet is the opposite.</li>
+        <li>Don't over-invent exact database technologies or region counts as if confirmed; several implementation specifics here are reasonable inference, not public fact (flagged throughout).</li>
+      </ul>
+
+      <h3 class="subhead">Flow vs. Superwhisper <span class="muted" style="font-weight:400;font-size:0.75em">(closest architectural counter-example)</span></h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th></th><th>Wispr Flow</th><th>Superwhisper</th></tr></thead>
+          <tbody>
+            <tr><td>Processing location</td><td>Cloud-only</td><td>On-device (offline-capable)</td></tr>
+            <tr><td>Formatting intelligence</td><td>LLM post-processing pass</td><td>Lighter local model, less context-aware formatting</td></tr>
+            <tr><td>Compliance posture</td><td>SOC 2 Type II, HIPAA controls</td><td>Not highlighted publicly</td></tr>
+            <tr><td>Core tradeoff</td><td>Higher formatting quality, requires network</td><td>Full privacy/offline, less contextual formatting</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<footer class="site-footer">
+  Generated with the <code>system-design-generator</code> Claude Code skill · <a href="https://github.com/rahuldha/system_design_builder">rahuldha/system_design_builder</a>
+</footer>
+
+</body>
+</html>

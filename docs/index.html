@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>System Design Notes</title>
+<meta name="description" content="Interview-ready system design breakdowns of real AI products — architecture, capacity math, and tradeoffs, reverse-engineered from public sources." />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cline x1='8' y1='24' x2='24' y2='24' stroke='%23b85c1e' stroke-width='2.5'/%3E%3Cline x1='8' y1='24' x2='16' y2='9' stroke='%23b85c1e' stroke-width='2.5'/%3E%3Cline x1='24' y1='24' x2='16' y2='9' stroke='%23b85c1e' stroke-width='2.5'/%3E%3Ccircle cx='8' cy='24' r='3.5' fill='%23b85c1e'/%3E%3Ccircle cx='24' cy='24' r='3.5' fill='%23b85c1e'/%3E%3Ccircle cx='16' cy='9' r='3.5' fill='%23b85c1e'/%3E%3C/svg%3E" />
+<link rel="stylesheet" href="assets/style.css" />
+</head>
+<body>
+
+<header class="site-header">
+  <a class="site-brand" href="index.html">
+    <svg class="mark" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <line x1="8" y1="24" x2="24" y2="24" stroke="currentColor" stroke-width="2.5"/>
+      <line x1="8" y1="24" x2="16" y2="9" stroke="currentColor" stroke-width="2.5"/>
+      <line x1="24" y1="24" x2="16" y2="9" stroke="currentColor" stroke-width="2.5"/>
+      <circle cx="8" cy="24" r="3.2" fill="currentColor"/>
+      <circle cx="24" cy="24" r="3.2" fill="currentColor"/>
+      <circle cx="16" cy="9" r="3.2" fill="currentColor"/>
+    </svg>
+    System Design Notes <small>/ system_design_builder</small>
+  </a>
+  <nav>
+    <a href="https://github.com/rahuldha/system_design_builder">Source on GitHub</a>
+  </nav>
+</header>
+
+<section class="hero">
+  <p class="eyebrow">Interview prep · reverse-engineered architecture</p>
+  <h1>Real products, taken apart down to the request path.</h1>
+  <p class="lede">Each doc works through requirements, capacity math, high-level architecture, data model, and the two or three decisions that actually make the product hard to build — sourced from public engineering writing where it exists, clearly flagged as inference where it doesn't.</p>
+</section>
+
+<div class="card-grid">
+
+  <a class="doc-card" href="wispr-flow.html">
+    <span class="card-kicker">Real company · voice dictation</span>
+    <h2>Wispr Flow</h2>
+    <p class="tagline">An LLM-native, OS-layer dictation tool that turns speech into properly formatted text in any application.</p>
+    <div class="card-stats tabular">
+      <span>&lt;700ms p99 latency</span>
+      <span>2.5M+ downloads</span>
+      <span>$700M valuation</span>
+    </div>
+    <span class="card-cta">Read the full doc →</span>
+  </a>
+
+  <a class="doc-card" href="granola.html">
+    <span class="card-kicker">Real company · meeting notes</span>
+    <h2>Granola</h2>
+    <p class="tagline">A bot-free AI notepad that blends your live rough notes with the call transcript — and doubles as an MCP context layer.</p>
+    <div class="card-stats tabular">
+      <span>50M+ meetings/yr</span>
+      <span>~10,000 concurrent streams</span>
+      <span>$1.5B valuation</span>
+    </div>
+    <span class="card-cta">Read the full doc →</span>
+  </a>
+
+</div>
+
+<p class="reference-note">Source Markdown for these docs lives in <code>system-designs/</code> in the repo, generated with the <code>system-design-generator</code> skill. A separate <code>reference_system_designs/</code> folder holds unrelated PDF reading material and isn't part of this site.</p>
+
+<footer class="site-footer">
+  Generated with the <code>system-design-generator</code> Claude Code skill · <a href="https://github.com/rahuldha/system_design_builder">rahuldha/system_design_builder</a>
+</footer>
+
+</body>
+</html>
